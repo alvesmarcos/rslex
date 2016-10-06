@@ -1,5 +1,7 @@
 use regex_syntax::Expr;
 use regex_syntax::Repeater;
+use regex_syntax::CharClass;
+use regex_syntax::ClassRange;
 
 use nfa::NFA;
 use nfa::Spec;
@@ -25,7 +27,6 @@ fn literal_to_spec(chars: &Vec<char>) -> Spec {
         let aux = Spec::single(Label::Symbol(*i));
         tmp = Spec::concat(tmp,aux);
     }
-
     // return the concatenation
     *tmp
 }
@@ -41,7 +42,6 @@ fn concat_to_spec(exprs: &Vec<Expr>) -> Spec {
         let aux : Box<Spec> = Box::new(regex_to_nfa_spec(&i));
         tmp  = Spec::concat(tmp,aux);
     }
-
     *tmp
 }
 
@@ -90,6 +90,33 @@ fn repeater_range(s1: Box<Spec>, min: u32, max: Option<u32>) -> Spec {
     *spec
 }
 
+fn class_to_speac(char_class: &CharClass)-> Spec {
+    let mut spec:Box<Spec> = Spec::single(Label::Epsilon);
+ 
+    for cr in char_class.iter() {
+        let mut tmp: Box<Spec> = Spec::single(Label::Symbol(cr.start));  
+        let mut begin = cr.start;
+
+        while begin <= cr.end {
+            begin = next_char(begin).unwrap();
+
+            tmp = Spec::union(tmp.clone(), Spec::single(Label::Symbol(begin)));      
+        }
+        spec = Spec::concat(spec.clone(), tmp);
+    }
+    *spec
+}
+
+fn next_char(c: char) -> Option<char> {
+    use std::char::{from_u32, MAX};
+    
+    match from_u32(c as u32 + 1) {
+        None => None,
+        r    => r
+    }
+}
+
+
 /// Converts `re` and repeater specification `r` into a NFA `Spec`.
 ///
 /// The repetition behavior is translated to the basic constructs
@@ -119,6 +146,7 @@ pub fn regex_to_nfa_spec(re: &Expr) -> Spec {
         Expr::Literal{ ref chars, casei } => literal_to_spec(chars),
         Expr::Concat(ref exprs) => concat_to_spec(&exprs),
         Expr::Alternate(ref exprs) => alternate_to_spec(&exprs),
+        Expr::Class(ref charClass) => class_to_speac(&charClass),
         _ => unimplemented!()
     }
 }
@@ -144,46 +172,31 @@ fn test_literal() {
 
 #[test]
 fn test_concat(){
-    let re1 = Expr::parse(r"ab").unwrap();
-    let re2 = Expr::parse(r"cd").unwrap();
+    let re = Expr::parse(r"a+b").unwrap();
+    let spec = regex_to_nfa_spec(&re);
+    let n = NFABuilder::build_from_spec(spec);
 
-
-    let mut tmp: Vec<Expr> = Vec::with_capacity(2);
-
-    tmp.push(re1);
-    tmp.push(re2);
-
-    let aux = concat_to_spec(&tmp);
-
-    let aux2 = NFABuilder::build_from_spec(aux);
-
-    assert!(aux2.simulate("abcd"));
-    assert!(!aux2.simulate("ab"));
-    assert!(!aux2.simulate("cd"));
-
+    println!("regex: {:?}", re);
+    assert!(n.simulate("aaaab")); 
+    assert!(!n.simulate("aabb"));
+    assert!(n.simulate("ab"));
+    assert!(!n.simulate("a"));
 }
 
 #[test]
 fn test_altenate(){
-    let re1 = Expr::parse(r"ab").unwrap();
-    let re2 = Expr::parse(r"cd").unwrap();
-
-
-    let mut tmp: Vec<Expr> = Vec::with_capacity(2);
-
-    tmp.push(re1);
-    tmp.push(re2);
-    let aux = alternate_to_spec(&tmp);
-
-    let aux2 = NFABuilder::build_from_spec(aux);
-
-    assert!(!aux2.simulate("abcd"));
-    assert!(aux2.simulate("ab"));
-    assert!(aux2.simulate("cd"));
+    let re = Expr::parse(r"ab|cd").unwrap();
+    let spec = regex_to_nfa_spec(&re);
+    let n = NFABuilder::build_from_spec(spec);
+    
+    println!("regex: {:?}", re);
+    assert!(!n.simulate("abcd"));
+    assert!(n.simulate("ab"));
+    assert!(n.simulate("cd"));
 }
 
 #[test]
-fn test_repeater_range() {
+fn test_repeater_range_min_max() {
     let re = Expr::parse(r"a{0,4}").unwrap();
     let spec = regex_to_nfa_spec(&re);
     let n = NFABuilder::build_from_spec(spec);
@@ -192,4 +205,28 @@ fn test_repeater_range() {
     assert!(n.simulate("aaaa"));
     assert!(n.simulate(""));
     assert!(!n.simulate("aaaaaaaaaaaa"));
+}
+
+#[test]
+fn test_repeater_range_min() {
+    let re = Expr::parse(r"b{3,}").unwrap();
+    let spec = regex_to_nfa_spec(&re);
+    let n = NFABuilder::build_from_spec(spec);
+
+    println!("regex: {:?}", re);
+    assert!(n.simulate("bbb"));
+    assert!(!n.simulate("b"));
+    assert!(n.simulate("bbbbbbbbbbbbbbbbbbbbbbb"));   
+}
+
+#[test]
+fn test_class_range() {
+    let re = Expr::parse(r"[a-z]").unwrap();
+    let spec = regex_to_nfa_spec(&re);
+    let n = NFABuilder::build_from_spec(spec);
+
+    println!("regex: {:?}", re);
+    assert!(n.simulate("a")); 
+    assert!(!n.simulate("1"));
+    assert!(n.simulate("b"));  
 }
